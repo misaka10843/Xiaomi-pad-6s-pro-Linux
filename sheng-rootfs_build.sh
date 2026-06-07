@@ -5,12 +5,15 @@ IMAGE_SIZE="12G"
 FILESYSTEM_UUID="ee8d3593-59b1-480e-a3b6-4fefb17ee7d8"
 
 DEBIAN_SUITE="trixie"
-# GitHub Actions 构建阶段使用官方 CDN，适合海外 runner
-DEBOOTSTRAP_MIRROR="http://deb.debian.org/debian"
 
-# 安装到平板后的系统 apt 源使用中科大
-DEBIAN_MIRROR="https://mirrors.ustc.edu.cn/debian"
-DEBIAN_SECURITY_MIRROR="https://mirrors.ustc.edu.cn/debian-security"
+# GitHub Actions 构建阶段使用 Debian 官方 HTTP 源
+DEBOOTSTRAP_MIRROR="http://deb.debian.org/debian"
+BUILD_DEBIAN_MIRROR="http://deb.debian.org/debian"
+BUILD_DEBIAN_SECURITY_MIRROR="http://deb.debian.org/debian-security"
+
+# 平板的 apt 源使用中科大 HTTPS 源
+FINAL_DEBIAN_MIRROR="https://mirrors.ustc.edu.cn/debian"
+FINAL_DEBIAN_SECURITY_MIRROR="https://mirrors.ustc.edu.cn/debian-security"
 
 UPSTREAM_REPO_URL="https://github.com/code002-2/Xiaomi-pad-6s-pro-Linux"
 MIPPS_DEB_URL="${UPSTREAM_REPO_URL}/releases/download/mipps/xiaomi-mipps-auth_0.11_arm64.deb"
@@ -90,8 +93,8 @@ cleanup_mounts() {
 
 trap cleanup_mounts EXIT ERR INT TERM
 
-write_debian_sources() {
-    echo "🪞 正在切换 APT 源到中科大 USTC Deb822 格式..."
+write_build_debian_sources() {
+    echo "🪞 正在写入构建阶段 APT 源: Debian 官方 HTTP..."
 
     mkdir -p rootdir/etc/apt/sources.list.d
 
@@ -101,13 +104,37 @@ write_debian_sources() {
 
     cat > rootdir/etc/apt/sources.list.d/debian.sources <<EOF
 Types: deb
-URIs: ${DEBIAN_MIRROR}
+URIs: ${BUILD_DEBIAN_MIRROR}
 Suites: ${DEBIAN_SUITE} ${DEBIAN_SUITE}-updates
 Components: main contrib non-free non-free-firmware
 Signed-By: /usr/share/keyrings/debian-archive-keyring.gpg
 
 Types: deb
-URIs: ${DEBIAN_SECURITY_MIRROR}
+URIs: ${BUILD_DEBIAN_SECURITY_MIRROR}
+Suites: ${DEBIAN_SUITE}-security
+Components: main contrib non-free non-free-firmware
+Signed-By: /usr/share/keyrings/debian-archive-keyring.gpg
+EOF
+}
+
+write_final_debian_sources() {
+    echo "🪞 正在写入最终系统 APT 源: 中科大 USTC HTTPS..."
+
+    mkdir -p rootdir/etc/apt/sources.list.d
+
+    rm -f rootdir/etc/apt/sources.list
+    rm -f rootdir/etc/apt/sources.list.d/*.list
+    rm -f rootdir/etc/apt/sources.list.d/*.sources
+
+    cat > rootdir/etc/apt/sources.list.d/debian.sources <<EOF
+Types: deb
+URIs: ${FINAL_DEBIAN_MIRROR}
+Suites: ${DEBIAN_SUITE} ${DEBIAN_SUITE}-updates
+Components: main contrib non-free non-free-firmware
+Signed-By: /usr/share/keyrings/debian-archive-keyring.gpg
+
+Types: deb
+URIs: ${FINAL_DEBIAN_SECURITY_MIRROR}
 Suites: ${DEBIAN_SUITE}-security
 Components: main contrib non-free non-free-firmware
 Signed-By: /usr/share/keyrings/debian-archive-keyring.gpg
@@ -157,6 +184,23 @@ GLFW_IM_MODULE=ibus
 EOF
 }
 
+configure_system_english_user_dirs() {
+    echo "📁 正在配置系统级英文 XDG 用户目录默认值..."
+
+    mkdir -p rootdir/etc/xdg
+
+    cat > rootdir/etc/xdg/user-dirs.defaults <<EOF
+DESKTOP=Desktop
+DOWNLOAD=Downloads
+TEMPLATES=Templates
+PUBLICSHARE=Public
+DOCUMENTS=Documents
+MUSIC=Music
+PICTURES=Pictures
+VIDEOS=Videos
+EOF
+}
+
 configure_chrony() {
     echo "⏱️ 正在配置 chrony 时间同步..."
 
@@ -191,6 +235,37 @@ create_user() {
     chroot rootdir usermod -aG sudo,audio,video,render,input,netdev,plugdev "$DEFAULT_USER"
 
     mkdir -p "rootdir/home/${DEFAULT_USER}/.config"
+    chroot rootdir chown -R "${DEFAULT_USER}:${DEFAULT_USER}" "/home/${DEFAULT_USER}"
+}
+
+configure_english_user_dirs() {
+    echo "📁 正在配置 ${DEFAULT_USER} 的英文用户目录..."
+
+    mkdir -p "rootdir/home/${DEFAULT_USER}/Desktop"
+    mkdir -p "rootdir/home/${DEFAULT_USER}/Downloads"
+    mkdir -p "rootdir/home/${DEFAULT_USER}/Templates"
+    mkdir -p "rootdir/home/${DEFAULT_USER}/Public"
+    mkdir -p "rootdir/home/${DEFAULT_USER}/Documents"
+    mkdir -p "rootdir/home/${DEFAULT_USER}/Music"
+    mkdir -p "rootdir/home/${DEFAULT_USER}/Pictures"
+    mkdir -p "rootdir/home/${DEFAULT_USER}/Videos"
+    mkdir -p "rootdir/home/${DEFAULT_USER}/.config"
+
+    cat > "rootdir/home/${DEFAULT_USER}/.config/user-dirs.dirs" <<EOF
+XDG_DESKTOP_DIR="\$HOME/Desktop"
+XDG_DOWNLOAD_DIR="\$HOME/Downloads"
+XDG_TEMPLATES_DIR="\$HOME/Templates"
+XDG_PUBLICSHARE_DIR="\$HOME/Public"
+XDG_DOCUMENTS_DIR="\$HOME/Documents"
+XDG_MUSIC_DIR="\$HOME/Music"
+XDG_PICTURES_DIR="\$HOME/Pictures"
+XDG_VIDEOS_DIR="\$HOME/Videos"
+EOF
+
+    cat > "rootdir/home/${DEFAULT_USER}/.config/user-dirs.locale" <<EOF
+en_US
+EOF
+
     chroot rootdir chown -R "${DEFAULT_USER}:${DEFAULT_USER}" "/home/${DEFAULT_USER}"
 }
 
@@ -489,7 +564,7 @@ truncate -s "$IMAGE_SIZE" "$ROOTFS_IMG"
 mkfs.ext4 -F -O ^metadata_csum "$ROOTFS_IMG"
 mount -o loop "$ROOTFS_IMG" rootdir
 
-echo "⬇️ 正在使用 debootstrap 从 Debian 官方拉取基础系统..."
+echo "⬇️ 正在使用 debootstrap 从 Debian 官方 HTTP 源拉取基础系统..."
 debootstrap --arch=arm64 "$DEBIAN_SUITE" rootdir "$DEBOOTSTRAP_MIRROR"
 
 mkdir -p rootdir/dev rootdir/dev/pts rootdir/proc rootdir/sys
@@ -500,12 +575,14 @@ mount -t proc proc rootdir/proc
 mount -t sysfs sys rootdir/sys
 
 configure_dns
-write_debian_sources
+write_build_debian_sources
 
 install_base_packages
 configure_locale_timezone
+configure_system_english_user_dirs
 configure_chrony
 create_user
+configure_english_user_dirs
 install_ibus_rime
 install_gnome_desktop
 install_firefox_official
@@ -516,6 +593,10 @@ configure_mesa_env_for_gdm
 echo "debian-gnome-dual" > rootdir/etc/hostname
 
 configure_fstab
+
+# 所有软件安装完成后，再把最终系统 APT 源切换为中科大 HTTPS 源
+write_final_debian_sources
+
 cleanup_chroot_before_pack
 
 cleanup_mounts
