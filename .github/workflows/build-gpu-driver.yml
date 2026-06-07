@@ -144,7 +144,7 @@ jobs:
           cd mesa-source
           ninja -C builddir
 
-      - name: Package deb
+            - name: Package deb
         shell: bash
         run: |
           set -e
@@ -160,67 +160,66 @@ jobs:
           mkdir -p "$PKG_ROOT/etc/profile.d"
           mkdir -p "$PKG_ROOT/etc/ld.so.conf.d"
           mkdir -p "$PKG_ROOT/etc/environment.d"
-
-          cat > "$PKG_ROOT/etc/ld.so.conf.d/mesa-freedreno.conf" <<'EOF'
-/opt/mesa-freedreno/lib/aarch64-linux-gnu
-EOF
-
-          cat > "$PKG_ROOT/etc/environment.d/90-mesa-freedreno.conf" <<'EOF'
-MESA_HOME=/opt/mesa-freedreno
-LIBGL_DRIVERS_PATH=/opt/mesa-freedreno/lib/aarch64-linux-gnu/dri
-GBM_BACKENDS_PATH=/opt/mesa-freedreno/lib/aarch64-linux-gnu/gbm
-__EGL_VENDOR_LIBRARY_DIRS=/opt/mesa-freedreno/share/glvnd/egl_vendor.d:/usr/share/glvnd/egl_vendor.d
-EOF
-
-          cat > "$PKG_ROOT/etc/profile.d/mesa-freedreno.sh" <<'EOF'
-# Mesa Freedreno / Turnip installed in /opt/mesa-freedreno
-
-if [ -d /opt/mesa-freedreno ]; then
-    export MESA_HOME=/opt/mesa-freedreno
-    export LD_LIBRARY_PATH=/opt/mesa-freedreno/lib/aarch64-linux-gnu:${LD_LIBRARY_PATH:-}
-    export LIBGL_DRIVERS_PATH=/opt/mesa-freedreno/lib/aarch64-linux-gnu/dri
-    export GBM_BACKENDS_PATH=/opt/mesa-freedreno/lib/aarch64-linux-gnu/gbm
-    export __EGL_VENDOR_LIBRARY_DIRS=/opt/mesa-freedreno/share/glvnd/egl_vendor.d:/usr/share/glvnd/egl_vendor.d
-
-    if [ -f /opt/mesa-freedreno/share/vulkan/icd.d/freedreno_icd.aarch64.json ]; then
-        export VK_ICD_FILENAMES=/opt/mesa-freedreno/share/vulkan/icd.d/freedreno_icd.aarch64.json
-    elif [ -f /opt/mesa-freedreno/share/vulkan/icd.d/freedreno_icd.arm64.json ]; then
-        export VK_ICD_FILENAMES=/opt/mesa-freedreno/share/vulkan/icd.d/freedreno_icd.arm64.json
-    fi
-fi
-EOF
-
           mkdir -p "$PKG_ROOT/DEBIAN"
+
+          printf '%s\n' \
+            '/opt/mesa-freedreno/lib/aarch64-linux-gnu' \
+            > "$PKG_ROOT/etc/ld.so.conf.d/mesa-freedreno.conf"
+
+          {
+            echo 'MESA_HOME=/opt/mesa-freedreno'
+            echo 'LIBGL_DRIVERS_PATH=/opt/mesa-freedreno/lib/aarch64-linux-gnu/dri'
+            echo 'GBM_BACKENDS_PATH=/opt/mesa-freedreno/lib/aarch64-linux-gnu/gbm'
+            echo '__EGL_VENDOR_LIBRARY_DIRS=/opt/mesa-freedreno/share/glvnd/egl_vendor.d:/usr/share/glvnd/egl_vendor.d'
+          } > "$PKG_ROOT/etc/environment.d/90-mesa-freedreno.conf"
+
+          {
+            echo '# Mesa Freedreno / Turnip installed in /opt/mesa-freedreno'
+            echo ''
+            echo 'if [ -d /opt/mesa-freedreno ]; then'
+            echo '    export MESA_HOME=/opt/mesa-freedreno'
+            echo '    export LD_LIBRARY_PATH=/opt/mesa-freedreno/lib/aarch64-linux-gnu:${LD_LIBRARY_PATH:-}'
+            echo '    export LIBGL_DRIVERS_PATH=/opt/mesa-freedreno/lib/aarch64-linux-gnu/dri'
+            echo '    export GBM_BACKENDS_PATH=/opt/mesa-freedreno/lib/aarch64-linux-gnu/gbm'
+            echo '    export __EGL_VENDOR_LIBRARY_DIRS=/opt/mesa-freedreno/share/glvnd/egl_vendor.d:/usr/share/glvnd/egl_vendor.d'
+            echo ''
+            echo '    if [ -f /opt/mesa-freedreno/share/vulkan/icd.d/freedreno_icd.aarch64.json ]; then'
+            echo '        export VK_ICD_FILENAMES=/opt/mesa-freedreno/share/vulkan/icd.d/freedreno_icd.aarch64.json'
+            echo '    elif [ -f /opt/mesa-freedreno/share/vulkan/icd.d/freedreno_icd.arm64.json ]; then'
+            echo '        export VK_ICD_FILENAMES=/opt/mesa-freedreno/share/vulkan/icd.d/freedreno_icd.arm64.json'
+            echo '    fi'
+            echo 'fi'
+          } > "$PKG_ROOT/etc/profile.d/mesa-freedreno.sh"
 
           DEB_VERSION="0.0.0+${MESA_VERSION_SAFE}+git${MESA_COMMIT}"
 
-          cat > "$PKG_ROOT/DEBIAN/control" <<EOF
-Package: mesa-freedreno-turnip-opt
-Version: ${DEB_VERSION}
-Architecture: arm64
-Maintainer: GitHub Actions <actions@github.com>
-Section: libs
-Priority: optional
-Depends: libc6, libdrm2, libx11-6, libx11-xcb1, libxext6, libxdamage1, libxcb-glx0, libxcb-shm0, libxcb-dri2-0, libxcb-dri3-0, libxcb-present0, libxcb-randr0, libxcb-sync1, libxcb-xfixes0, libxshmfence1, libxxf86vm1, libxrandr2, libxfixes3, libwayland-client0, libwayland-server0, libvulkan1, libexpat1, libzstd1, libglvnd0
-Description: Mesa Freedreno OpenGL and Turnip Vulkan drivers installed under /opt
- Built from Mesa ref ${{ inputs.mesa_ref }}, commit ${MESA_COMMIT}.
- This package does not replace Debian system Mesa files directly.
-EOF
+          {
+            echo 'Package: mesa-freedreno-turnip-opt'
+            echo "Version: ${DEB_VERSION}"
+            echo 'Architecture: arm64'
+            echo 'Maintainer: GitHub Actions <actions@github.com>'
+            echo 'Section: libs'
+            echo 'Priority: optional'
+            echo 'Depends: libc6, libdrm2, libx11-6, libx11-xcb1, libxext6, libxdamage1, libxcb-glx0, libxcb-shm0, libxcb-dri2-0, libxcb-dri3-0, libxcb-present0, libxcb-randr0, libxcb-sync1, libxcb-xfixes0, libxshmfence1, libxxf86vm1, libxrandr2, libxfixes3, libwayland-client0, libwayland-server0, libvulkan1, libexpat1, libzstd1, libglvnd0'
+            echo 'Description: Mesa Freedreno OpenGL and Turnip Vulkan drivers installed under /opt'
+            echo " Built from Mesa ref ${{ inputs.mesa_ref }}, commit ${MESA_COMMIT}."
+            echo ' This package does not replace Debian system Mesa files directly.'
+          } > "$PKG_ROOT/DEBIAN/control"
 
-          cat > "$PKG_ROOT/DEBIAN/postinst" <<'EOF'
-#!/bin/sh
-set -e
-ldconfig || true
-exit 0
-EOF
+          {
+            echo '#!/bin/sh'
+            echo 'set -e'
+            echo 'ldconfig || true'
+            echo 'exit 0'
+          } > "$PKG_ROOT/DEBIAN/postinst"
           chmod 0755 "$PKG_ROOT/DEBIAN/postinst"
 
-          cat > "$PKG_ROOT/DEBIAN/postrm" <<'EOF'
-#!/bin/sh
-set -e
-ldconfig || true
-exit 0
-EOF
+          {
+            echo '#!/bin/sh'
+            echo 'set -e'
+            echo 'ldconfig || true'
+            echo 'exit 0'
+          } > "$PKG_ROOT/DEBIAN/postrm"
           chmod 0755 "$PKG_ROOT/DEBIAN/postrm"
 
           cd "$PKG_ROOT"
