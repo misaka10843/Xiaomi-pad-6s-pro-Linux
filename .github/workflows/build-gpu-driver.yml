@@ -126,7 +126,7 @@ jobs:
             --libdir=lib/aarch64-linux-gnu \
             --buildtype=${{ inputs.build_type }} \
             -Dplatforms=x11,wayland \
-            -Dgallium-drivers=freedreno,zink,swrast \
+            -Dgallium-drivers=freedreno,zink,softpipe \
             -Dvulkan-drivers=freedreno \
             -Dfreedreno-kmds=${{ inputs.freedreno_kmds }} \
             -Dgles1=disabled \
