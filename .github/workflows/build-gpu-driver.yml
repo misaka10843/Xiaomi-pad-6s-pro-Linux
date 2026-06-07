@@ -141,10 +141,12 @@ jobs:
       - name: Compile Mesa
         shell: bash
         run: |
+          set -e
+
           cd mesa-source
           ninja -C builddir
 
-            - name: Package deb
+      - name: Package deb
         shell: bash
         run: |
           set -e
