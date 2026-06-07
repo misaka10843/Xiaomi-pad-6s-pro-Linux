@@ -339,7 +339,14 @@ install_base_packages() {
         libgbm1 \
         libvulkan1 \
         vulkan-tools \
-        mesa-utils"
+        mesa-utils \
+        ffmpeg \
+        libavcodec-extra \
+        libavformat61 \
+        libavutil59 \
+        libswresample5 \
+        libavfilter10 \
+        libavdevice61"
 
     chroot rootdir systemctl enable NetworkManager
     chroot rootdir systemctl enable ssh

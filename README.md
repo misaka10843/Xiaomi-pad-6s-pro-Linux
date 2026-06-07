@@ -4,6 +4,25 @@
 
 请必须阅读上游仓库中的所有资料！！
 
+### 安装步骤
+
+与 [上游仓库wiki](https://github.com/code002-2/Xiaomi-pad-6s-pro-Linux/wiki/%E5%AE%89%E8%A3%85%E6%8C%87%E5%8D%97) 一致，仅需将debian的镜像换为本仓库的即可
+
+### 一些需要运行的内容
+
+#### firefox提示不支持html5播放器
+
+请运行下方的命令安装解码器
+
+```bash
+sudo apt update
+sudo apt install -y ffmpeg libavcodec-extra libavformat61 libavutil59 libswresample5 libavfilter10 libavdevice61
+```
+
+#### 安装后重分配
+
+重新分配空间 `sudo resize2fs /dev/sda30`
+
 ### 构建流程调整
 
 - 修改Debian 13 的 GitHub Actions。
