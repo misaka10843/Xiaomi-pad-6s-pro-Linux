@@ -22,6 +22,11 @@ MIPPS_DEB_URL="${UPSTREAM_REPO_URL}/releases/download/mipps/xiaomi-mipps-auth_0.
 DEFAULT_USER="misaka10843"
 DEFAULT_PASS="misaka10843"
 
+# 调试阶段建议保持 multi-user，确认系统可进命令行后再手动 start gdm3
+# 如果以后确认 GUI 没问题，再改成 graphical
+DEFAULT_TARGET="multi-user.target"
+# DEFAULT_TARGET="graphical.target"
+
 if [ $# -lt 2 ] || [ $# -gt 4 ]; then
     echo "用法: $0 <distro-variant> <kernel_version> [boot_mode] [desktop_env]"
     echo "示例: $0 debian-desktop 7.1 dual gnome"
@@ -396,12 +401,16 @@ install_gnome_desktop() {
         -f install -y"
 
     chroot rootdir systemctl enable gdm3
-    chroot rootdir systemctl set-default graphical.target
+
+    # 调试版默认进入命令行，不直接启动 GDM。
+    # 登录后手动执行: sudo systemctl start gdm3
+    chroot rootdir systemctl set-default "${DEFAULT_TARGET}"
 
     mkdir -p rootdir/etc/gdm3
 
     cat > rootdir/etc/gdm3/daemon.conf <<EOF
 [daemon]
+WaylandEnable=false
 AutomaticLoginEnable=true
 AutomaticLogin=${DEFAULT_USER}
 EOF
@@ -593,14 +602,19 @@ create_user
 install_ibus_rime
 install_gnome_desktop
 
-# xdg-user-dirs 包安装完成后，再覆盖英文目录配置    
+# xdg-user-dirs 包安装完成后，再覆盖英文目录配置
 configure_system_english_user_dirs
 configure_english_user_dirs
 
 install_firefox_official
 configure_flatpak
 install_device_debs
-configure_mesa_env_for_gdm
+
+if [ -d rootdir/opt/mesa-freedreno ]; then
+    configure_mesa_env_for_gdm
+else
+    echo "🎮 未检测到 /opt/mesa-freedreno，跳过 Mesa Freedreno 环境配置。"
+fi
 
 echo "debian-gnome-dual" > rootdir/etc/hostname
 
