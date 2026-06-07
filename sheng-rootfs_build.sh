@@ -5,6 +5,10 @@ IMAGE_SIZE="12G"
 FILESYSTEM_UUID="ee8d3593-59b1-480e-a3b6-4fefb17ee7d8"
 
 DEBIAN_SUITE="trixie"
+# GitHub Actions 构建阶段使用官方 CDN，适合海外 runner
+DEBOOTSTRAP_MIRROR="http://deb.debian.org/debian"
+
+# 安装到平板后的系统 apt 源使用中科大
 DEBIAN_MIRROR="https://mirrors.ustc.edu.cn/debian"
 DEBIAN_SECURITY_MIRROR="https://mirrors.ustc.edu.cn/debian-security"
 
@@ -485,8 +489,8 @@ truncate -s "$IMAGE_SIZE" "$ROOTFS_IMG"
 mkfs.ext4 -F -O ^metadata_csum "$ROOTFS_IMG"
 mount -o loop "$ROOTFS_IMG" rootdir
 
-echo "⬇️ 正在使用 debootstrap 从中科大源拉取基础系统..."
-debootstrap --arch=arm64 "$DEBIAN_SUITE" rootdir "$DEBIAN_MIRROR"
+echo "⬇️ 正在使用 debootstrap 从 Debian 官方拉取基础系统..."
+debootstrap --arch=arm64 "$DEBIAN_SUITE" rootdir "$DEBOOTSTRAP_MIRROR"
 
 mkdir -p rootdir/dev rootdir/dev/pts rootdir/proc rootdir/sys
 
