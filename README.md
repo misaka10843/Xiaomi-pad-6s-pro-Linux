@@ -30,7 +30,7 @@
 - 默认普通用户改为 `misaka10843`。
 - 默认普通用户密码改为 `misaka10843`。
 - root 密码改为 `misaka10843`。
-- 默认主机名改为 `debian-gnome-dual`。
+- 默认主机名改为 `debian-mi-pad`。
 - 默认时区设置为 `Asia/Shanghai`。
 - 默认语言环境设置为 `zh_CN.UTF-8`。
 - 默认启用 GDM 自动登录到 `misaka10843`。

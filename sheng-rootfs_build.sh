@@ -21,11 +21,10 @@ MIPPS_DEB_URL="${UPSTREAM_REPO_URL}/releases/download/mipps/xiaomi-mipps-auth_0.
 
 DEFAULT_USER="misaka10843"
 DEFAULT_PASS="misaka10843"
+HOSTNAME_VALUE="debian-mi-pad"
 
-# 调试阶段建议保持 multi-user，确认系统可进命令行后再手动 start gdm3
-# 如果以后确认 GUI 没问题，再改成 graphical
-DEFAULT_TARGET="multi-user.target"
-# DEFAULT_TARGET="graphical.target"
+# 正式版默认进入 GUI
+DEFAULT_TARGET="graphical.target"
 
 if [ $# -lt 2 ] || [ $# -gt 4 ]; then
     echo "用法: $0 <distro-variant> <kernel_version> [boot_mode] [desktop_env]"
@@ -228,6 +227,21 @@ EOF
     chroot rootdir systemctl enable chrony
 }
 
+configure_hostname() {
+    echo "🏷️ 正在配置 hostname 和 hosts..."
+
+    echo "${HOSTNAME_VALUE}" > rootdir/etc/hostname
+
+    cat > rootdir/etc/hosts <<EOF
+127.0.0.1 localhost
+127.0.1.1 ${HOSTNAME_VALUE}
+
+::1 localhost ip6-localhost ip6-loopback
+ff02::1 ip6-allnodes
+ff02::2 ip6-allrouters
+EOF
+}
+
 create_user() {
     echo "👤 正在创建默认用户..."
 
@@ -288,6 +302,7 @@ install_base_packages() {
         ca-certificates \
         xz-utils \
         bzip2 \
+        file \
         network-manager \
         openssh-server \
         wpasupplicant \
@@ -302,6 +317,8 @@ install_base_packages() {
         initramfs-tools \
         qrtr-tools \
         rmtfs \
+        tqftpserv \
+        protection-domain-mapper \
         bluez \
         blueman \
         pipewire \
@@ -309,6 +326,7 @@ install_base_packages() {
         pipewire-pulse \
         wireplumber \
         alsa-utils \
+        alsa-ucm-conf \
         pavucontrol \
         upower \
         power-profiles-daemon \
@@ -323,14 +341,12 @@ install_base_packages() {
         vulkan-tools \
         mesa-utils"
 
-    chroot rootdir bash -c "export DEBIAN_FRONTEND=noninteractive && apt-get install -y --no-install-recommends tqftpserv pd-mapper" || \
-        echo "⚠️ tqftpserv / pd-mapper 不存在或安装失败，已跳过。"
-
     chroot rootdir systemctl enable NetworkManager
     chroot rootdir systemctl enable ssh
     chroot rootdir systemctl enable bluetooth || true
     chroot rootdir systemctl enable rmtfs || true
     chroot rootdir systemctl enable qrtr-ns || true
+    chroot rootdir systemctl enable pd-mapper || true
     chroot rootdir systemctl enable power-profiles-daemon || true
     chroot rootdir systemctl --global enable pipewire || true
     chroot rootdir systemctl --global enable pipewire-pulse || true
@@ -378,6 +394,7 @@ install_gnome_desktop() {
         install -y --no-install-recommends \
         gnome-shell \
         gnome-session \
+        gnome-session-xsession \
         gnome-terminal \
         gdm3 \
         gnome-control-center \
@@ -386,11 +403,15 @@ install_gnome_desktop() {
         gnome-software-plugin-flatpak \
         gnome-system-monitor \
         gnome-tweaks \
+        gnome-keyring \
         nautilus \
         gvfs \
         gvfs-backends \
         xdg-user-dirs \
         xdg-user-dirs-gtk \
+        xserver-xorg \
+        xserver-xorg-core \
+        xinit \
         flatpak"
 
     chroot rootdir bash -c "export DEBIAN_FRONTEND=noninteractive && dpkg --configure -a"
@@ -401,16 +422,13 @@ install_gnome_desktop() {
         -f install -y"
 
     chroot rootdir systemctl enable gdm3
-
-    # 调试版默认进入命令行，不直接启动 GDM。
-    # 登录后手动执行: sudo systemctl start gdm3
     chroot rootdir systemctl set-default "${DEFAULT_TARGET}"
 
     mkdir -p rootdir/etc/gdm3
 
+    # 默认不禁用 Wayland。GDM 会优先提供 GNOME Wayland，同时保留 GNOME on Xorg 回退会话。
     cat > rootdir/etc/gdm3/daemon.conf <<EOF
 [daemon]
-WaylandEnable=false
 AutomaticLoginEnable=true
 AutomaticLogin=${DEFAULT_USER}
 EOF
@@ -506,14 +524,99 @@ install_device_debs() {
 
     chroot rootdir systemctl enable rmtfs || true
     chroot rootdir systemctl enable qrtr-ns || true
+    chroot rootdir systemctl enable pd-mapper || true
     chroot rootdir systemctl enable iio-sensor-proxy || true
     chroot rootdir systemctl enable sheng-sensors || true
     chroot rootdir systemctl enable sheng-devauth || true
     chroot rootdir systemctl enable fastrpc || true
 }
 
+fix_alsa_ucm_links() {
+    echo "🔊 正在修复 Xiaomi Pad 6S Pro ALSA UCM 入口链接..."
+
+    mkdir -p rootdir/usr/share/alsa/ucm2/conf.d/sm8550
+
+    if [ -f rootdir/usr/share/alsa/ucm2/Xiaomi/sheng/Xiaomi-Pad6SPro.conf ]; then
+        rm -f rootdir/usr/share/alsa/ucm2/conf.d/sm8550/Xiaomi-Pad6SPro.conf
+        ln -s ../../Xiaomi/sheng/Xiaomi-Pad6SPro.conf \
+            rootdir/usr/share/alsa/ucm2/conf.d/sm8550/Xiaomi-Pad6SPro.conf
+    else
+        echo "⚠️ 未找到 Xiaomi/sheng/Xiaomi-Pad6SPro.conf，跳过 UCM 链接修复。"
+    fi
+}
+
+install_cirrus_audio_firmware() {
+    echo "🔊 正在安装 Cirrus CS35L43 音频固件..."
+
+    mkdir -p rootdir/lib/firmware/cirrus
+
+    if [ -d firmware/cirrus ]; then
+        cp -a firmware/cirrus/* rootdir/lib/firmware/cirrus/
+    else
+        echo "⚠️ 当前仓库没有 firmware/cirrus 目录，跳过 Cirrus 固件复制。"
+        echo "⚠️ 扬声器可能无法正常工作。"
+        return 0
+    fi
+
+    (
+        cd rootdir/lib/firmware/cirrus
+
+        for pos in BLH BLL BRL TLH TLL TRL; do
+            cp cs35l43-dsp1-spk-prot.wmfw "cs35l43-DSP1-spk-prot-(null)-${pos}.wmfw" 2>/dev/null || true
+            cp cs35l43-dsp1-spk-prot.wmfw "cs35l43-DSP1-spk-prot--(null)-${pos}.wmfw" 2>/dev/null || true
+            cp "${pos}-cs35l43-dsp1-spk-prot.bin" "cs35l43-DSP1-spk-prot-(null)-${pos}.bin" 2>/dev/null || true
+            cp "${pos}-cs35l43-dsp1-spk-prot.bin" "cs35l43-DSP1-spk-prot--(null)-${pos}.bin" 2>/dev/null || true
+        done
+
+        chmod 0644 ./* 2>/dev/null || true
+    )
+}
+
+configure_sheng_audio_init_service() {
+    echo "🔊 正在配置 sheng-audio-init 服务..."
+
+    mkdir -p rootdir/usr/local/sbin
+    mkdir -p rootdir/etc/systemd/system
+
+    cat > rootdir/usr/local/sbin/sheng-audio-init <<'EOF'
+#!/bin/bash
+set -e
+
+systemctl start pd-mapper.service 2>/dev/null || true
+
+sleep 2
+
+amixer -c 0 cset name='SECONDARY_MI2S_RX Audio Mixer MultiMedia1' 1 2>/dev/null || true
+amixer -c 0 sset 'stream0.vol_ctrl0 MultiMedia1 Playback Volu' 80% 2>/dev/null || true
+
+alsactl store 0 2>/dev/null || true
+
+exit 0
+EOF
+
+    chmod 0755 rootdir/usr/local/sbin/sheng-audio-init
+
+    cat > rootdir/etc/systemd/system/sheng-audio-init.service <<'EOF'
+[Unit]
+Description=Initialize Xiaomi Sheng audio routing
+After=sound.target pd-mapper.service
+Wants=pd-mapper.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/sheng-audio-init
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+    chroot rootdir systemctl enable pd-mapper || true
+    chroot rootdir systemctl enable sheng-audio-init.service || true
+}
+
 configure_mesa_env_for_gdm() {
-    echo "🎮 正在为 GDM 和用户会话配置 Mesa Freedreno 环境..."
+    echo "🎮 正在为 Wayland/Xorg 会话配置 Mesa Freedreno 环境..."
 
     mkdir -p rootdir/etc/profile.d
     mkdir -p rootdir/etc/environment.d
@@ -598,6 +701,7 @@ write_build_debian_sources
 install_base_packages
 configure_locale_timezone
 configure_chrony
+configure_hostname
 create_user
 install_ibus_rime
 install_gnome_desktop
@@ -609,14 +713,15 @@ configure_english_user_dirs
 install_firefox_official
 configure_flatpak
 install_device_debs
+fix_alsa_ucm_links
+install_cirrus_audio_firmware
+configure_sheng_audio_init_service
 
 if [ -d rootdir/opt/mesa-freedreno ]; then
     configure_mesa_env_for_gdm
 else
     echo "🎮 未检测到 /opt/mesa-freedreno，跳过 Mesa Freedreno 环境配置。"
 fi
-
-echo "debian-gnome-dual" > rootdir/etc/hostname
 
 configure_fstab
 
