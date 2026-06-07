@@ -23,6 +23,12 @@ sudo apt install -y ffmpeg libavcodec-extra libavformat61 libavutil59 libswresam
 
 重新分配空间 `sudo resize2fs /dev/sda30`
 
+#### 输入法相关
+
+当前输入法为`ibus+rime` 建议使用[薄荷输入法](https://www.mintimate.cc/zh/guide/importMint.html)
+
+当前附带了rime的五笔等，如果不需要可以自行删除
+
 ### 构建流程调整
 
 - 修改Debian 13 的 GitHub Actions。
