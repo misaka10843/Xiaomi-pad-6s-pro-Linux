@@ -164,7 +164,6 @@ configure_locale_timezone() {
     cat > rootdir/etc/default/locale <<EOF
 LANG=zh_CN.UTF-8
 LANGUAGE=zh_CN:zh
-LC_ALL=zh_CN.UTF-8
 EOF
 
     cat > rootdir/etc/locale.conf <<EOF
@@ -368,7 +367,10 @@ EOF
 install_gnome_desktop() {
     echo "🖥️ 正在安装 GNOME 桌面环境..."
 
-    chroot rootdir bash -c "export DEBIAN_FRONTEND=noninteractive && apt-get install -y --no-install-recommends \
+    chroot rootdir bash -c "export DEBIAN_FRONTEND=noninteractive && apt-get \
+        -o Dpkg::Options::='--force-confdef' \
+        -o Dpkg::Options::='--force-confold' \
+        install -y --no-install-recommends \
         gnome-shell \
         gnome-session \
         gnome-terminal \
@@ -385,6 +387,13 @@ install_gnome_desktop() {
         xdg-user-dirs \
         xdg-user-dirs-gtk \
         flatpak"
+
+    chroot rootdir bash -c "export DEBIAN_FRONTEND=noninteractive && dpkg --configure -a"
+
+    chroot rootdir bash -c "export DEBIAN_FRONTEND=noninteractive && apt-get \
+        -o Dpkg::Options::='--force-confdef' \
+        -o Dpkg::Options::='--force-confold' \
+        -f install -y"
 
     chroot rootdir systemctl enable gdm3
     chroot rootdir systemctl set-default graphical.target
@@ -579,12 +588,15 @@ write_build_debian_sources
 
 install_base_packages
 configure_locale_timezone
-configure_system_english_user_dirs
 configure_chrony
 create_user
-configure_english_user_dirs
 install_ibus_rime
 install_gnome_desktop
+
+# xdg-user-dirs 包安装完成后，再覆盖英文目录配置    
+configure_system_english_user_dirs
+configure_english_user_dirs
+
 install_firefox_official
 configure_flatpak
 install_device_debs
