@@ -1,12 +1,12 @@
-name: 构建适用于Debian/Ubuntu的mesa freedreno驱动
+name: 构建 Mesa Freedreno Turnip 驱动
 
 on:
   workflow_dispatch:
     inputs:
-      mesa_version:
-        description: 'Mesa 版本 (tag或分支，如 main, 24.3, 25.0)'
+      mesa_ref:
+        description: 'Mesa 分支、tag 或 commit，如 main、25.1、25.2'
         required: true
-        default: 'main'
+        default: '25.2'
       build_type:
         description: '构建类型'
         type: choice
@@ -14,117 +14,250 @@ on:
           - release
           - debug
         default: 'release'
+      freedreno_kmds:
+        description: 'Freedreno KMD 后端，SM8550/Android 内核建议 msm,kgsl'
+        required: true
+        default: 'msm,kgsl'
       skip_release:
-        description: '跳过创建GitHub Release'
+        description: '跳过创建 GitHub Release'
         type: boolean
         default: false
 
+permissions:
+  contents: write
+
 jobs:
   build-mesa-freedreno-turnip:
-    name: Build Mesa (Freedreno/Turnip) .deb
+    name: Build Mesa Freedreno Turnip deb
     runs-on: ubuntu-24.04-arm
-    permissions:
-      contents: write
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
 
+    steps:
       - name: Install build dependencies
+        shell: bash
         run: |
           sudo apt-get update
           sudo apt-get install -y \
-            git python3-pip python3-setuptools python3-mako \
-            ninja-build pkg-config \
-            libdrm-dev libx11-dev libxext-dev libxdamage-dev \
-            libxcb-glx0-dev libxcb-shm0-dev libxcb-dri2-0-dev \
-            libxcb-dri3-dev libxcb-present-dev libxshmfence-dev \
-            libxxf86vm-dev libxrandr-dev libxfixes-dev \
-            libwayland-dev wayland-protocols libxcb-randr0-dev \
+            git \
+            ca-certificates \
+            python3 \
+            python3-pip \
+            python3-setuptools \
+            python3-mako \
+            python3-ply \
+            python3-yaml \
+            python3-pycparser \
+            ninja-build \
+            pkg-config \
+            pkgconf \
+            flex \
+            bison \
+            glslang-tools \
+            spirv-tools \
+            libdrm-dev \
+            libx11-dev \
+            libx11-xcb-dev \
+            libxext-dev \
+            libxdamage-dev \
+            libxcb-glx0-dev \
+            libxcb-shm0-dev \
+            libxcb-dri2-0-dev \
+            libxcb-dri3-dev \
+            libxcb-present-dev \
+            libxcb-randr0-dev \
+            libxcb-sync-dev \
+            libxcb-xfixes0-dev \
+            libxshmfence-dev \
+            libxxf86vm-dev \
+            libxrandr-dev \
+            libxfixes-dev \
+            libwayland-dev \
+            wayland-protocols \
             libwayland-egl-backend-dev \
-            libvulkan-dev libelf-dev libexpat1-dev libzstd-dev \
-            dpkg-dev debhelper fakeroot libglvnd-dev glslang-tools \
-            libxcb-keysyms1-dev libx11-xcb-dev
+            libvulkan-dev \
+            libelf-dev \
+            libexpat1-dev \
+            libzstd-dev \
+            libglvnd-dev \
+            libunwind-dev \
+            dpkg-dev \
+            fakeroot \
+            xz-utils \
+            zstd
 
-      - name: Upgrade meson to >=1.4.0
+      - name: Upgrade Meson
+        shell: bash
         run: |
-          pip3 install --upgrade meson
-          echo "$HOME/.local/bin" >> $GITHUB_PATH
-          meson --version
+          python3 -m pip install --user --break-system-packages --upgrade meson
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+          "$HOME/.local/bin/meson" --version
 
       - name: Clone Mesa source
+        shell: bash
         run: |
-          git clone --depth 1 --branch ${{ github.event.inputs.mesa_version }} \
-            https://gitlab.freedesktop.org/mesa/mesa.git mesa-source
-          cd mesa-source
-          echo "MESA_COMMIT=$(git rev-parse --short HEAD)" >> $GITHUB_ENV
+          set -e
 
-      - name: Configure build with Meson
-        run: |
+          MESA_REF="${{ inputs.mesa_ref }}"
+
+          git clone --depth 1 --branch "$MESA_REF" \
+            https://gitlab.freedesktop.org/mesa/mesa.git mesa-source || {
+              echo "浅克隆分支或 tag 失败，尝试按 commit 拉取..."
+              git clone https://gitlab.freedesktop.org/mesa/mesa.git mesa-source
+              cd mesa-source
+              git checkout "$MESA_REF"
+            }
+
           cd mesa-source
-          meson setup builddir/ \
-            --prefix=/usr \
+
+          MESA_COMMIT="$(git rev-parse --short HEAD)"
+          MESA_VERSION_SAFE="$(echo "$MESA_REF" | tr '/_' '--' | tr -cd 'A-Za-z0-9.+-')"
+
+          echo "MESA_COMMIT=${MESA_COMMIT}" >> "$GITHUB_ENV"
+          echo "MESA_VERSION_SAFE=${MESA_VERSION_SAFE}" >> "$GITHUB_ENV"
+
+      - name: Configure Mesa
+        shell: bash
+        run: |
+          set -e
+
+          cd mesa-source
+
+          meson setup builddir \
+            --prefix=/opt/mesa-freedreno \
             --libdir=lib/aarch64-linux-gnu \
-            --buildtype=${{ github.event.inputs.build_type }} \
-            -D platforms=x11,wayland \
-            -D gallium-drivers=freedreno \
-            -D vulkan-drivers=freedreno \
-            -D gles1=disabled \
-            -D gles2=enabled \
-            -D glx=dri
+            --buildtype=${{ inputs.build_type }} \
+            -Dplatforms=x11,wayland \
+            -Dgallium-drivers=freedreno,zink,swrast \
+            -Dvulkan-drivers=freedreno \
+            -Dfreedreno-kmds=${{ inputs.freedreno_kmds }} \
+            -Dgles1=disabled \
+            -Dgles2=enabled \
+            -Dglx=dri \
+            -Degl=enabled \
+            -Dgbm=enabled \
+            -Dshared-glapi=enabled \
+            -Dllvm=disabled \
+            -Dvalgrind=disabled
 
       - name: Compile Mesa
+        shell: bash
         run: |
           cd mesa-source
-          ninja -C builddir/
+          ninja -C builddir
 
-      - name: Package into .deb
+      - name: Package deb
+        shell: bash
         run: |
+          set -e
+
           cd mesa-source
-          mkdir -p debian/usr/lib/aarch64-linux-gnu/
-          DESTDIR=$(pwd)/debian ninja -C builddir/ install
-          mkdir -p debian/DEBIAN
-          # 构造符合 Debian 规范的版本号：以数字开头，使用 0.0.0+git<commit>
-          DEB_VERSION="0.0.0+git${{ env.MESA_COMMIT }}"
-          cat > debian/DEBIAN/control <<EOF
-          Package: mesa-freedreno-turnip
-          Version: ${DEB_VERSION}
-          Architecture: arm64
-          Maintainer: GitHub Actions <actions@github.com>
-          Description: Freedreno (OpenGL) and Turnip (Vulkan) drivers for Qualcomm Adreno GPUs
-           Built from Mesa commit ${{ env.MESA_COMMIT }}.
-          Depends: libc6, libdrm2, libx11-6, libxext6, libxdamage1, libxcb-glx0, libxcb-shm0, libxcb-dri2-0, libxcb-dri3-0, libxcb-present0, libxshmfence1, libxxf86vm1, libxrandr2, libxfixes3, libwayland-client0, libvulkan1
-          EOF
-          cd debian
-          find usr -type f -exec md5sum {} \; > DEBIAN/md5sums
+
+          PKG_ROOT="$(pwd)/pkgroot"
+          rm -rf "$PKG_ROOT"
+          mkdir -p "$PKG_ROOT"
+
+          DESTDIR="$PKG_ROOT" ninja -C builddir install
+
+          mkdir -p "$PKG_ROOT/etc/profile.d"
+          mkdir -p "$PKG_ROOT/etc/ld.so.conf.d"
+          mkdir -p "$PKG_ROOT/etc/environment.d"
+
+          cat > "$PKG_ROOT/etc/ld.so.conf.d/mesa-freedreno.conf" <<'EOF'
+/opt/mesa-freedreno/lib/aarch64-linux-gnu
+EOF
+
+          cat > "$PKG_ROOT/etc/environment.d/90-mesa-freedreno.conf" <<'EOF'
+MESA_HOME=/opt/mesa-freedreno
+LIBGL_DRIVERS_PATH=/opt/mesa-freedreno/lib/aarch64-linux-gnu/dri
+GBM_BACKENDS_PATH=/opt/mesa-freedreno/lib/aarch64-linux-gnu/gbm
+__EGL_VENDOR_LIBRARY_DIRS=/opt/mesa-freedreno/share/glvnd/egl_vendor.d:/usr/share/glvnd/egl_vendor.d
+EOF
+
+          cat > "$PKG_ROOT/etc/profile.d/mesa-freedreno.sh" <<'EOF'
+# Mesa Freedreno / Turnip installed in /opt/mesa-freedreno
+
+if [ -d /opt/mesa-freedreno ]; then
+    export MESA_HOME=/opt/mesa-freedreno
+    export LD_LIBRARY_PATH=/opt/mesa-freedreno/lib/aarch64-linux-gnu:${LD_LIBRARY_PATH:-}
+    export LIBGL_DRIVERS_PATH=/opt/mesa-freedreno/lib/aarch64-linux-gnu/dri
+    export GBM_BACKENDS_PATH=/opt/mesa-freedreno/lib/aarch64-linux-gnu/gbm
+    export __EGL_VENDOR_LIBRARY_DIRS=/opt/mesa-freedreno/share/glvnd/egl_vendor.d:/usr/share/glvnd/egl_vendor.d
+
+    if [ -f /opt/mesa-freedreno/share/vulkan/icd.d/freedreno_icd.aarch64.json ]; then
+        export VK_ICD_FILENAMES=/opt/mesa-freedreno/share/vulkan/icd.d/freedreno_icd.aarch64.json
+    elif [ -f /opt/mesa-freedreno/share/vulkan/icd.d/freedreno_icd.arm64.json ]; then
+        export VK_ICD_FILENAMES=/opt/mesa-freedreno/share/vulkan/icd.d/freedreno_icd.arm64.json
+    fi
+fi
+EOF
+
+          mkdir -p "$PKG_ROOT/DEBIAN"
+
+          DEB_VERSION="0.0.0+${MESA_VERSION_SAFE}+git${MESA_COMMIT}"
+
+          cat > "$PKG_ROOT/DEBIAN/control" <<EOF
+Package: mesa-freedreno-turnip-opt
+Version: ${DEB_VERSION}
+Architecture: arm64
+Maintainer: GitHub Actions <actions@github.com>
+Section: libs
+Priority: optional
+Depends: libc6, libdrm2, libx11-6, libx11-xcb1, libxext6, libxdamage1, libxcb-glx0, libxcb-shm0, libxcb-dri2-0, libxcb-dri3-0, libxcb-present0, libxcb-randr0, libxcb-sync1, libxcb-xfixes0, libxshmfence1, libxxf86vm1, libxrandr2, libxfixes3, libwayland-client0, libwayland-server0, libvulkan1, libexpat1, libzstd1, libglvnd0
+Description: Mesa Freedreno OpenGL and Turnip Vulkan drivers installed under /opt
+ Built from Mesa ref ${{ inputs.mesa_ref }}, commit ${MESA_COMMIT}.
+ This package does not replace Debian system Mesa files directly.
+EOF
+
+          cat > "$PKG_ROOT/DEBIAN/postinst" <<'EOF'
+#!/bin/sh
+set -e
+ldconfig || true
+exit 0
+EOF
+          chmod 0755 "$PKG_ROOT/DEBIAN/postinst"
+
+          cat > "$PKG_ROOT/DEBIAN/postrm" <<'EOF'
+#!/bin/sh
+set -e
+ldconfig || true
+exit 0
+EOF
+          chmod 0755 "$PKG_ROOT/DEBIAN/postrm"
+
+          cd "$PKG_ROOT"
+          find opt etc -type f -exec md5sum {} \; > DEBIAN/md5sums
           cd ..
-          dpkg-deb --build debian mesa-freedreno-turnip_${DEB_VERSION}_arm64.deb
 
-      - name: Upload .deb as artifact
+          fakeroot dpkg-deb --build "$PKG_ROOT" "mesa-freedreno-turnip-opt_${DEB_VERSION}_arm64.deb"
+
+          mkdir -p ../out
+          mv mesa-freedreno-turnip-opt_*_arm64.deb ../out/
+
+      - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: mesa-freedreno-turnip
-          path: mesa-source/mesa-freedreno-turnip_*.deb
+          name: mesa-freedreno-turnip-opt
+          path: out/mesa-freedreno-turnip-opt_*_arm64.deb
           retention-days: 14
+          if-no-files-found: error
 
-      - name: Create Release and upload .deb
-        if: ${{ !github.event.inputs.skip_release }}
-        uses: softprops/action-gh-release@v1
+      - name: Create Release and upload deb
+        if: ${{ inputs.skip_release != true }}
+        uses: softprops/action-gh-release@v2
         with:
-          tag_name: mesa-freedreno-turnip-${{ github.event.inputs.mesa_version }}-${{ env.MESA_COMMIT }}
-          name: "Mesa Freedreno/Turnip Driver - ${{ github.event.inputs.mesa_version }}"
+          tag_name: mesa-freedreno-turnip-${{ env.MESA_VERSION_SAFE }}-${{ env.MESA_COMMIT }}
+          name: "Mesa Freedreno Turnip - ${{ inputs.mesa_ref }}"
           body: |
-            Built from Mesa commit ${{ env.MESA_COMMIT }}
-            
-            **包含驱动**:
-            - Freedreno (OpenGL ES / Desktop OpenGL)
-            - Turnip (Vulkan)
-            
-            **安装方法**:
-            ```bash
-            sudo dpkg -i mesa-freedreno-turnip_*.deb
-            sudo apt install -f  # 解决依赖
-            ```
-          files: mesa-source/mesa-freedreno-turnip_*.deb
+            Built from Mesa ref `${{ inputs.mesa_ref }}`, commit `${{ env.MESA_COMMIT }}`.
+
+            包含：
+
+            - Freedreno OpenGL / OpenGL ES
+            - Turnip Vulkan
+            - KMD backend: `${{ inputs.freedreno_kmds }}`
+            - 安装路径: `/opt/mesa-freedreno`
+
+            这个包不会直接覆盖 Debian 系统 Mesa 文件。
+          files: out/mesa-freedreno-turnip-opt_*_arm64.deb
           draft: false
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

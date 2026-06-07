@@ -1,163 +1,178 @@
-name: 🌀 Build Debian 13 Desktop
+name: 🌀 Build Debian 13 GNOME Dual
 
 on:
   workflow_dispatch:
     inputs:
       kernel_version:
-        description: '内核版本 (如 7.1)'
+        description: '内核版本，如 7.1'
         required: true
         default: '7.1'
-      desktop_env:
-        description: '选择桌面环境'
-        required: true
-        type: choice
-        options:
-          - all
-          - gnome
-          - kde
-        default: 'all'
-      boot_mode:
-        description: '选择启动模式'
-        required: true
-        type: choice
-        options:
-          - all
-          - dual
-          - single
-        default: 'all'
+      mesa_release_tag:
+        description: 'Mesa 驱动 Release tag，留空则不内置 Mesa Freedreno/Turnip'
+        required: false
+        default: ''
       skip_release:
-        description: '跳过创建GitHub Release'
+        description: '跳过创建 GitHub Release'
         type: boolean
         default: false
-  push:
-    branches:
-      - main
-      - master
 
 permissions:
   contents: write
 
+env:
+  UPSTREAM_REPO: code002-2/Xiaomi-pad-6s-pro-Linux
+
 jobs:
-  prepare-release:
+  build-debian:
+    name: Build Debian 13 GNOME Dual
     runs-on: ubuntu-24.04-arm
-    # 🚨 核心修复 1：将计算好的动态矩阵暴露出给下游 Job 使用
-    outputs:
-      release_tag: ${{ steps.tag.outputs.release_tag }}
-      matrix_desktop: ${{ steps.set-matrix.outputs.desktop }}
-      matrix_boot: ${{ steps.set-matrix.outputs.boot }}
+
     steps:
+      - name: Checkout fork repository
+        uses: actions/checkout@v4
+
       - name: Generate release tag
         id: tag
+        shell: bash
         run: |
-          DE_SUFFIX="${{ github.event.inputs.desktop_env || 'all' }}"
-          TAG="debian13-${DE_SUFFIX}-$(date -u '+%Y%m%d')-${GITHUB_SHA::8}"
-          echo "release_tag=$TAG" >> $GITHUB_OUTPUT
+          TAG="debian13-gnome-dual-$(date -u '+%Y%m%d')-${GITHUB_SHA::8}"
+          echo "release_tag=$TAG" >> "$GITHUB_OUTPUT"
 
-      # 🚨 核心修复 2：用 Bash 脚本动态计算 JSON 格式的矩阵数组
-      - name: 🧮 Generate Dynamic Matrix
-        id: set-matrix
+      - name: Deploy build environment
+        shell: bash
         run: |
-          DESKTOP="${{ github.event.inputs.desktop_env || 'all' }}"
-          if [ "$DESKTOP" == "all" ]; then
-            echo 'desktop=["gnome", "kde"]' >> $GITHUB_OUTPUT
+          sudo apt update
+          sudo apt install -y \
+            ca-certificates \
+            curl \
+            wget \
+            gh \
+            debootstrap \
+            e2fsprogs \
+            util-linux \
+            psmisc \
+            libarchive-tools \
+            p7zip-full \
+            xz-utils \
+            android-sdk-libsparse-utils
+
+      - name: Download kernel bundle from upstream
+        shell: bash
+        run: |
+          set -e
+
+          KERNEL_VER="${{ inputs.kernel_version }}"
+
+          echo "Using upstream repo: ${UPSTREAM_REPO}"
+          echo "Kernel version: ${KERNEL_VER}"
+
+          rm -f ./*.deb
+
+          if gh release download "kernel-bundle-${KERNEL_VER}" \
+            --pattern "*.deb" \
+            --repo "${UPSTREAM_REPO}" \
+            --clobber; then
+            echo "Downloaded from tag: kernel-bundle-${KERNEL_VER}"
+          elif gh release download "kernel-${KERNEL_VER}" \
+            --pattern "*.deb" \
+            --repo "${UPSTREAM_REPO}" \
+            --clobber; then
+            echo "Downloaded from tag: kernel-${KERNEL_VER}"
           else
-            echo "desktop=[\"$DESKTOP\"]" >> $GITHUB_OUTPUT
-          fi
-          
-          BOOT="${{ github.event.inputs.boot_mode || 'all' }}"
-          if [ "$BOOT" == "all" ]; then
-            echo 'boot=["dual", "single"]' >> $GITHUB_OUTPUT
-          else
-            echo "boot=[\"$BOOT\"]" >> $GITHUB_OUTPUT
+            echo "❌ 无法从上游仓库下载内核 deb 包。"
+            echo "请检查上游 Release 是否存在 kernel-bundle-${KERNEL_VER} 或 kernel-${KERNEL_VER}。"
+            exit 1
           fi
 
-      - name: Create GitHub Release
-        if: ${{ !github.event.inputs.skip_release }}
-        uses: softprops/action-gh-release@v1
-        with:
-          tag_name: ${{ steps.tag.outputs.release_tag }}
-          name: "Debian 13 Desktop (${{ github.event.inputs.desktop_env || 'all' }}) - ${{ steps.tag.outputs.release_tag }}"
-          body: |
-            🌀 Debian 13 (Trixie) Desktop For SM8550
-            
-            ---
-            
-            ### 📋 构建组合
-            | 参数 | 详情 |
-            |------|------|
-            | 架构 | ARM64 (arm64) |
-            | 内核版本 | ${{ github.event.inputs.kernel_version || '7.1' }} |
-            | 包含桌面 | ${{ github.event.inputs.desktop_env || 'all' }} |
-            | 启动模式 | ${{ github.event.inputs.boot_mode || 'all' }} |
-            
-            ---
-            
-            ### 🔐 默认凭据
-            - 普通用户: `luser` / 密码: `luser`
-            - 管理员用户: `root` / 密码: `1234`
-            
-            ---
-            
-            ### 📦 镜像文件
-            如果你选择了 'all'，云端矩阵将并发生成全部组合的 `.7z` 镜像。
-          draft: false
+          echo "Downloaded kernel bundle deb packages:"
+          ls -lh ./*.deb
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-  # ==========================================
-  # 🚀 云端多路并发构建矩阵
-  # ==========================================
-  build-debian:
-    name: Build (${{ matrix.desktop }} | ${{ matrix.boot }})
-    runs-on: ubuntu-24.04-arm
-    needs: prepare-release
-    strategy:
-      fail-fast: false 
-      # 🚨 核心修复 3：从上一阶段读取 JSON 格式的动态数组，彻底解决 if 报错！
-      matrix:
-        desktop: ${{ fromJSON(needs.prepare-release.outputs.matrix_desktop) }}
-        boot: ${{ fromJSON(needs.prepare-release.outputs.matrix_boot) }}
-        
-    steps:
-      - uses: actions/checkout@v4
-      
-      - name: "🔧 部署构建环境"
+      - name: Download Mesa Freedreno Turnip driver
+        if: ${{ inputs.mesa_release_tag != '' }}
+        shell: bash
         run: |
-          sudo apt update
-          sudo apt install -y debootstrap libarchive-tools p7zip-full curl wget android-sdk-libsparse-utils
+          set -e
 
-      - name: Download kernel bundle
-        run: |
-          KERNEL_VER="${{ github.event.inputs.kernel_version }}"
-          if [ -z "$KERNEL_VER" ]; then KERNEL_VER="7.1"; fi
-          
-          gh release download "kernel-bundle-${KERNEL_VER}" \
-            --pattern "*.deb" --repo "${{ github.repository }}" --clobber || true
+          echo "Mesa release tag: ${{ inputs.mesa_release_tag }}"
+
+          gh release download "${{ inputs.mesa_release_tag }}" \
+            --pattern "mesa-freedreno-turnip-opt_*_arm64.deb" \
+            --repo "${{ github.repository }}" \
+            --clobber
+
+          echo "Downloaded Mesa deb:"
+          ls -lh mesa-freedreno-turnip-opt_*_arm64.deb
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Build RootFS
         id: build
+        shell: bash
         run: |
+          set -e
+
           chmod +x sheng-rootfs_build.sh
-          # 把矩阵分配到的专属任务传给构建脚本
-          sudo bash sheng-rootfs_build.sh debian-desktop "${{ github.event.inputs.kernel_version || '7.1' }}" "${{ matrix.boot }}" "${{ matrix.desktop }}"
-          
-          PKG_COUNT=$(ls -1 *.7z 2>/dev/null | wc -l)
-          echo "pkg_count=$PKG_COUNT" >> $GITHUB_OUTPUT
+
+          sudo bash sheng-rootfs_build.sh \
+            debian-desktop \
+            "${{ inputs.kernel_version }}" \
+            dual \
+            gnome
+
+          PKG_COUNT=$(find . -maxdepth 1 -name "*.7z" -type f | wc -l)
+          echo "pkg_count=$PKG_COUNT" >> "$GITHUB_OUTPUT"
+
+          echo "Generated packages:"
+          find . -maxdepth 1 -name "*.7z" -type f -print -exec ls -lh {} \;
 
       - name: Upload artifact
+        if: ${{ steps.build.outputs.pkg_count > 0 }}
         uses: actions/upload-artifact@v4
         with:
-          name: debian-${{ matrix.desktop }}-${{ matrix.boot }}
+          name: debian13-gnome-dual
           path: "*.7z"
           retention-days: 7
+          if-no-files-found: error
 
-      - name: Upload to Release
-        if: ${{ !github.event.inputs.skip_release && steps.build.outputs.pkg_count > 0 }}
-        uses: softprops/action-gh-release@v1
+      - name: Create Release and upload image
+        if: ${{ inputs.skip_release != true && steps.build.outputs.pkg_count > 0 }}
+        uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ needs.prepare-release.outputs.release_tag }}
+          tag_name: ${{ steps.tag.outputs.release_tag }}
+          name: "Debian 13 GNOME Dual - ${{ steps.tag.outputs.release_tag }}"
+          body: |
+            🌀 Debian 13 (Trixie) GNOME Desktop For Xiaomi Pad 6S Pro / SM8550
+
+            ---
+
+            ### 📋 构建信息
+
+            | 参数 | 详情 |
+            |------|------|
+            | 架构 | ARM64 / arm64 |
+            | 发行版 | Debian 13 / trixie |
+            | 桌面环境 | GNOME |
+            | 启动模式 | dual |
+            | 内核版本 | ${{ inputs.kernel_version }} |
+            | Mesa 驱动 | ${{ inputs.mesa_release_tag || '未内置' }} |
+            | 上游仓库 | code002-2/Xiaomi-pad-6s-pro-Linux |
+
+            ---
+
+            ### 🔐 默认凭据
+
+            - 普通用户: `misaka10843`
+            - 普通用户密码: `misaka10843`
+            - root 密码: `misaka10843`
+
+            ---
+
+            ### 📦 镜像文件
+
+            本 workflow 仅构建 GNOME + dual 双系统模式镜像。
           files: "*.7z"
+          draft: false
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
