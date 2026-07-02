@@ -444,13 +444,14 @@ EOF
     chroot rootdir bash -c "export DEBIAN_FRONTEND=noninteractive && dpkg --configure -a" || true
 
     echo "🔧 正在启用设备相关服务..."
-    chroot rootdir systemctl enable rmtfs || true
-    chroot rootdir systemctl enable qrtr-ns || true
-    chroot rootdir systemctl enable pd-mapper || true
-    chroot rootdir systemctl enable iio-sensor-proxy || true
-    chroot rootdir systemctl enable sheng-sensors || true
-    chroot rootdir systemctl enable sheng-devauth || true
-    chroot rootdir systemctl enable fastrpc || true
+
+    for svc in rmtfs qrtr-ns pd-mapper iio-sensor-proxy sheng-sensors sheng-devauth fastrpc; do
+        if chroot rootdir systemctl list-unit-files "${svc}.service" >/dev/null 2>&1; then
+            chroot rootdir systemctl enable "${svc}.service" || true
+        else
+            echo "ℹ️ 未找到 ${svc}.service，跳过 enable。"
+        fi
+    done
 }
 
 install_gpu_driver_deb() {
@@ -584,6 +585,8 @@ EOF
 install_kde_desktop() {
     echo "🖥️ 安装 KDE Plasma 桌面环境..."
 
+    chroot rootdir bash -c "export DEBIAN_FRONTEND=noninteractive && apt-get update"
+
     chroot rootdir bash -c "export DEBIAN_FRONTEND=noninteractive && apt-get install -y --no-install-recommends \
         kde-plasma-desktop \
         sddm \
@@ -596,10 +599,15 @@ install_kde_desktop() {
         kde-config-gtk-style \
         xdg-desktop-portal-kde \
         ark \
-        spectacle \
         gwenview \
         okular \
         xdg-user-dirs"
+
+    echo "📸 正在尝试安装 KDE 截图工具..."
+
+    chroot rootdir bash -c "export DEBIAN_FRONTEND=noninteractive && apt-get install -y --no-install-recommends \
+        kde-spectacle" || \
+        echo "⚠️ kde-spectacle 不存在或安装失败，跳过截图工具。"
 
     chroot rootdir systemctl enable sddm || true
 
