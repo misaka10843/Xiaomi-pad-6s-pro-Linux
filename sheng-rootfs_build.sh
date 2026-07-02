@@ -384,25 +384,21 @@ install_device_debs() {
     echo "将安装以下 deb 包："
     ls -lh rootdir/tmp/debs/*.deb
 
+    echo "🔊 正在单独隔离 alsa-xiaomi-sheng，避免与 alsa-ucm-conf 产生 dpkg 文件冲突..."
+    if ls rootdir/tmp/debs/alsa-xiaomi-sheng*.deb >/dev/null 2>&1; then
+        mv rootdir/tmp/debs/alsa-xiaomi-sheng*.deb rootdir/tmp/debs-stage/
+    fi
+
     echo "📦 正在安装设备 deb 依赖..."
+    chroot rootdir bash -c "export DEBIAN_FRONTEND=noninteractive && apt-get update"
+
     chroot rootdir bash -c "export DEBIAN_FRONTEND=noninteractive && apt-get install -y --no-install-recommends \
         libglib2.0-0 \
         libprotobuf-c1 \
         libqmi-glib5 \
         libmbim-glib4 \
-        initramfs-tools"
-
-    echo "🔊 正在处理 alsa-ucm-conf 与 alsa-xiaomi-sheng 的文件冲突..."
-
-    # 先尽量移除 Debian 官方 alsa-ucm-conf。
-    chroot rootdir bash -c "export DEBIAN_FRONTEND=noninteractive && apt-get purge -y alsa-ucm-conf" || true
-    chroot rootdir bash -c "export DEBIAN_FRONTEND=noninteractive && apt-get autoremove -y" || true
-    chroot rootdir bash -c "dpkg --configure -a" || true
-
-    # 把 alsa-xiaomi-sheng 单独拿出来，避免 apt-get install /tmp/debs/*.deb 时直接被 dpkg 冲突卡死。
-    if ls rootdir/tmp/debs/alsa-xiaomi-sheng*.deb >/dev/null 2>&1; then
-        mv rootdir/tmp/debs/alsa-xiaomi-sheng*.deb rootdir/tmp/debs-stage/
-    fi
+        initramfs-tools \
+        alsa-ucm-conf"
 
     echo "📦 正在安装除 alsa-xiaomi-sheng 之外的设备 deb..."
 
@@ -417,18 +413,35 @@ install_device_debs() {
         echo "ℹ️ 没有其他设备 deb 需要安装。"
     fi
 
-    echo "🔊 正在强制安装 alsa-xiaomi-sheng 设备 UCM 包..."
+    echo "🔊 正在解包 alsa-xiaomi-sheng UCM 文件到系统，不注册 dpkg 包..."
 
     if ls rootdir/tmp/debs-stage/alsa-xiaomi-sheng*.deb >/dev/null 2>&1; then
-        chroot rootdir bash -c "dpkg -i --force-overwrite /tmp/debs-stage/alsa-xiaomi-sheng*.deb" || {
-            echo "⚠️ alsa-xiaomi-sheng 安装返回错误，尝试修复依赖。"
-            chroot rootdir bash -c "export DEBIAN_FRONTEND=noninteractive && apt-get --fix-broken install -y" || true
-            chroot rootdir bash -c "export DEBIAN_FRONTEND=noninteractive && dpkg --configure -a" || true
-            chroot rootdir bash -c "dpkg -i --force-overwrite /tmp/debs-stage/alsa-xiaomi-sheng*.deb"
-        }
+        chroot rootdir bash -c '
+            set -e
+            for deb in /tmp/debs-stage/alsa-xiaomi-sheng*.deb; do
+                echo "正在解包 $deb ..."
+                dpkg-deb -x "$deb" /
+            done
+        '
+
+        mkdir -p rootdir/var/lib/xiaomi-sheng
+        cat > rootdir/var/lib/xiaomi-sheng/alsa-xiaomi-sheng-overlay.txt <<EOF
+alsa-xiaomi-sheng.deb was extracted with dpkg-deb -x during image build.
+
+Reason:
+- alsa-xiaomi-sheng contains files also shipped by Debian alsa-ucm-conf.
+- alsa-xiaomi-sheng also depends on alsa-ucm-conf.
+- Installing it as a normal dpkg package causes overwrite/dependency conflicts.
+EOF
+
+        echo "✅ alsa-xiaomi-sheng UCM 文件已覆盖到系统。"
     else
-        echo "⚠️ 未找到 alsa-xiaomi-sheng deb，跳过设备 UCM 安装。"
+        echo "⚠️ 未找到 alsa-xiaomi-sheng deb，跳过设备 UCM 覆盖。"
     fi
+
+    echo "🔧 正在修复 dpkg 状态..."
+    chroot rootdir bash -c "export DEBIAN_FRONTEND=noninteractive && apt-get --fix-broken install -y" || true
+    chroot rootdir bash -c "export DEBIAN_FRONTEND=noninteractive && dpkg --configure -a" || true
 
     echo "🔧 正在启用设备相关服务..."
     chroot rootdir systemctl enable rmtfs || true
