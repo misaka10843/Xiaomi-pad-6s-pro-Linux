@@ -364,6 +364,7 @@ install_device_debs() {
     echo "📦 正在注入设备专属 .deb 驱动包..."
 
     mkdir -p rootdir/tmp/debs
+    mkdir -p rootdir/tmp/debs-stage
 
     if ls xiaomi-mipps-auth_*_arm64.deb >/dev/null 2>&1; then
         echo "📥 已检测到工作区 MIPPS deb，跳过 fallback 下载。"
@@ -383,6 +384,7 @@ install_device_debs() {
     echo "将安装以下 deb 包："
     ls -lh rootdir/tmp/debs/*.deb
 
+    echo "📦 正在安装设备 deb 依赖..."
     chroot rootdir bash -c "export DEBIAN_FRONTEND=noninteractive && apt-get install -y --no-install-recommends \
         libglib2.0-0 \
         libprotobuf-c1 \
@@ -390,18 +392,45 @@ install_device_debs() {
         libmbim-glib4 \
         initramfs-tools"
 
-    echo "🔊 正在移除 Debian 官方 alsa-ucm-conf，避免与 alsa-xiaomi-sheng.deb 文件冲突..."
+    echo "🔊 正在处理 alsa-ucm-conf 与 alsa-xiaomi-sheng 的文件冲突..."
+
+    # 先尽量移除 Debian 官方 alsa-ucm-conf。
     chroot rootdir bash -c "export DEBIAN_FRONTEND=noninteractive && apt-get purge -y alsa-ucm-conf" || true
     chroot rootdir bash -c "export DEBIAN_FRONTEND=noninteractive && apt-get autoremove -y" || true
     chroot rootdir bash -c "dpkg --configure -a" || true
 
-    chroot rootdir bash -c "export DEBIAN_FRONTEND=noninteractive && apt-get install -y /tmp/debs/*.deb" || {
-        echo "⚠️ 部分设备 .deb 安装失败，尝试修复依赖后继续。"
-        chroot rootdir bash -c "export DEBIAN_FRONTEND=noninteractive && apt-get --fix-broken install -y" || true
-        chroot rootdir bash -c "export DEBIAN_FRONTEND=noninteractive && dpkg --configure -a" || true
-        chroot rootdir bash -c "export DEBIAN_FRONTEND=noninteractive && apt-get install -y /tmp/debs/*.deb"
-    }
+    # 把 alsa-xiaomi-sheng 单独拿出来，避免 apt-get install /tmp/debs/*.deb 时直接被 dpkg 冲突卡死。
+    if ls rootdir/tmp/debs/alsa-xiaomi-sheng*.deb >/dev/null 2>&1; then
+        mv rootdir/tmp/debs/alsa-xiaomi-sheng*.deb rootdir/tmp/debs-stage/
+    fi
 
+    echo "📦 正在安装除 alsa-xiaomi-sheng 之外的设备 deb..."
+
+    if ls rootdir/tmp/debs/*.deb >/dev/null 2>&1; then
+        chroot rootdir bash -c "export DEBIAN_FRONTEND=noninteractive && apt-get install -y /tmp/debs/*.deb" || {
+            echo "⚠️ 部分设备 .deb 安装失败，尝试修复依赖后继续。"
+            chroot rootdir bash -c "export DEBIAN_FRONTEND=noninteractive && apt-get --fix-broken install -y" || true
+            chroot rootdir bash -c "export DEBIAN_FRONTEND=noninteractive && dpkg --configure -a" || true
+            chroot rootdir bash -c "export DEBIAN_FRONTEND=noninteractive && apt-get install -y /tmp/debs/*.deb"
+        }
+    else
+        echo "ℹ️ 没有其他设备 deb 需要安装。"
+    fi
+
+    echo "🔊 正在强制安装 alsa-xiaomi-sheng 设备 UCM 包..."
+
+    if ls rootdir/tmp/debs-stage/alsa-xiaomi-sheng*.deb >/dev/null 2>&1; then
+        chroot rootdir bash -c "dpkg -i --force-overwrite /tmp/debs-stage/alsa-xiaomi-sheng*.deb" || {
+            echo "⚠️ alsa-xiaomi-sheng 安装返回错误，尝试修复依赖。"
+            chroot rootdir bash -c "export DEBIAN_FRONTEND=noninteractive && apt-get --fix-broken install -y" || true
+            chroot rootdir bash -c "export DEBIAN_FRONTEND=noninteractive && dpkg --configure -a" || true
+            chroot rootdir bash -c "dpkg -i --force-overwrite /tmp/debs-stage/alsa-xiaomi-sheng*.deb"
+        }
+    else
+        echo "⚠️ 未找到 alsa-xiaomi-sheng deb，跳过设备 UCM 安装。"
+    fi
+
+    echo "🔧 正在启用设备相关服务..."
     chroot rootdir systemctl enable rmtfs || true
     chroot rootdir systemctl enable qrtr-ns || true
     chroot rootdir systemctl enable pd-mapper || true
