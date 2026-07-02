@@ -4,9 +4,10 @@ on:
   workflow_dispatch:
     inputs:
       kernel_version:
-        description: '内核版本 (如 7.1)'
+        description: '内核版本，例如 7.1'
         required: true
         default: '7.1'
+
       desktop_env:
         description: '选择桌面环境'
         required: true
@@ -15,7 +16,8 @@ on:
           - all
           - gnome
           - kde
-        default: 'all'
+        default: 'kde'
+
       boot_mode:
         description: '选择启动模式'
         required: true
@@ -24,11 +26,107 @@ on:
           - all
           - dual
           - single
-        default: 'all'
+        default: 'dual'
+
+      default_user:
+        description: '默认用户名'
+        required: true
+        default: 'luser'
+
+      default_pass:
+        description: '默认用户密码'
+        required: true
+        default: 'luser'
+
+      root_pass:
+        description: 'root 密码'
+        required: true
+        default: '1234'
+
+      firefox_channel:
+        description: 'Firefox 版本'
+        required: true
+        type: choice
+        options:
+          - official
+          - esr
+        default: 'official'
+
+      install_flatpak:
+        description: '安装 Flatpak，方便安装 QQ 等软件'
+        required: true
+        type: choice
+        options:
+          - 'true'
+          - 'false'
+        default: 'true'
+
+      install_gpu_driver:
+        description: '尝试注入 Mesa Freedreno/Turnip 显驱 deb，失败不影响构建'
+        required: true
+        type: choice
+        options:
+          - 'true'
+          - 'false'
+        default: 'false'
+
+      gpu_release_tag:
+        description: 'Mesa 显驱 Release tag'
+        required: true
+        default: 'mesa-freedreno-turnip-latest'
+
+      image_size:
+        description: 'RootFS 镜像大小'
+        required: true
+        default: '8G'
+
+      extra_driver_tags:
+        description: '额外下载的上游驱动 Release tags。默认 sensor 已包含 fastrpc/iio/libssc/sheng-sensors'
+        required: true
+        default: 'sensor,MIPPS'
+
+      download_devauth_fallback:
+        description: '当 Kernel Bundle 不完整时，额外下载 sheng_devauth 兜底'
+        required: true
+        type: choice
+        options:
+          - 'false'
+          - 'true'
+        default: 'false'
+
+      install_wifi_fix:
+        description: '安装 Wi-Fi 修复包。只有默认固件无 Wi-Fi 时才建议开启'
+        required: true
+        type: choice
+        options:
+          - 'false'
+          - 'true'
+        default: 'false'
+
+      wifi_fix_tag:
+        description: 'Wi-Fi 修复包 Release tag，仅 install_wifi_fix=true 时使用'
+        required: true
+        default: 'fix'
+
+      install_steam_runtime:
+        description: '下载 Steam ARM64 runtime/Proton 相关包。体积较大，不建议默认开启'
+        required: true
+        type: choice
+        options:
+          - 'false'
+          - 'true'
+        default: 'false'
+
+      steam_runtime_tag:
+        description: 'Steam runtime Release tag，仅 install_steam_runtime=true 时使用'
+        required: true
+        default: 'app'
+
       skip_release:
-        description: '跳过创建GitHub Release'
+        description: '跳过创建 GitHub Release'
         type: boolean
         default: false
+
   push:
     branches:
       - main
@@ -40,111 +138,261 @@ permissions:
 jobs:
   prepare-release:
     runs-on: ubuntu-24.04-arm
-    # 🚨 核心修复 1：将计算好的动态矩阵暴露出给下游 Job 使用
+
     outputs:
       release_tag: ${{ steps.tag.outputs.release_tag }}
       matrix_desktop: ${{ steps.set-matrix.outputs.desktop }}
       matrix_boot: ${{ steps.set-matrix.outputs.boot }}
+
     steps:
       - name: Generate release tag
         id: tag
+        shell: bash
         run: |
-          DE_SUFFIX="${{ github.event.inputs.desktop_env || 'all' }}"
-          TAG="debian13-${DE_SUFFIX}-$(date -u '+%Y%m%d')-${GITHUB_SHA::8}"
-          echo "release_tag=$TAG" >> $GITHUB_OUTPUT
+          DESKTOP="${{ inputs.desktop_env || 'kde' }}"
+          BOOT="${{ inputs.boot_mode || 'dual' }}"
+          TAG="debian13-${DESKTOP}-${BOOT}-$(date -u '+%Y%m%d')-${GITHUB_SHA::8}"
+          echo "release_tag=$TAG" >> "$GITHUB_OUTPUT"
 
-      # 🚨 核心修复 2：用 Bash 脚本动态计算 JSON 格式的矩阵数组
-      - name: 🧮 Generate Dynamic Matrix
+      - name: Generate Dynamic Matrix
         id: set-matrix
+        shell: bash
         run: |
-          DESKTOP="${{ github.event.inputs.desktop_env || 'all' }}"
-          if [ "$DESKTOP" == "all" ]; then
-            echo 'desktop=["gnome", "kde"]' >> $GITHUB_OUTPUT
+          DESKTOP="${{ inputs.desktop_env || 'kde' }}"
+          if [ "$DESKTOP" = "all" ]; then
+            echo 'desktop=["gnome","kde"]' >> "$GITHUB_OUTPUT"
           else
-            echo "desktop=[\"$DESKTOP\"]" >> $GITHUB_OUTPUT
+            echo "desktop=[\"$DESKTOP\"]" >> "$GITHUB_OUTPUT"
           fi
-          
-          BOOT="${{ github.event.inputs.boot_mode || 'all' }}"
-          if [ "$BOOT" == "all" ]; then
-            echo 'boot=["dual", "single"]' >> $GITHUB_OUTPUT
+
+          BOOT="${{ inputs.boot_mode || 'dual' }}"
+          if [ "$BOOT" = "all" ]; then
+            echo 'boot=["dual","single"]' >> "$GITHUB_OUTPUT"
           else
-            echo "boot=[\"$BOOT\"]" >> $GITHUB_OUTPUT
+            echo "boot=[\"$BOOT\"]" >> "$GITHUB_OUTPUT"
           fi
 
       - name: Create GitHub Release
-        if: ${{ !github.event.inputs.skip_release }}
-        uses: softprops/action-gh-release@v1
+        if: ${{ inputs.skip_release != true }}
+        uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ steps.tag.outputs.release_tag }}
-          name: "Debian 13 Desktop (${{ github.event.inputs.desktop_env || 'all' }}) - ${{ steps.tag.outputs.release_tag }}"
+          name: "Debian 13 Desktop (${{ inputs.desktop_env || 'kde' }} / ${{ inputs.boot_mode || 'dual' }}) - ${{ steps.tag.outputs.release_tag }}"
           body: |
-            🌀 Debian 13 (Trixie) Desktop For SM8550
-            
-            ---
-            
-            ### 📋 构建组合
-            | 参数 | 详情 |
-            |------|------|
-            | 架构 | ARM64 (arm64) |
-            | 内核版本 | ${{ github.event.inputs.kernel_version || '7.1' }} |
-            | 包含桌面 | ${{ github.event.inputs.desktop_env || 'all' }} |
-            | 启动模式 | ${{ github.event.inputs.boot_mode || 'all' }} |
-            
-            ---
-            
-            ### 🔐 默认凭据
-            - 普通用户: `luser` / 密码: `luser`
-            - 管理员用户: `root` / 密码: `1234`
-            
-            ---
-            
-            ### 📦 镜像文件
-            如果你选择了 'all'，云端矩阵将并发生成全部组合的 `.7z` 镜像。
+            🌀 Debian 13 (Trixie) Desktop For Xiaomi Pad 6S Pro
+
+            ### 构建信息
+
+            | 项目 | 内容 |
+            | --- | --- |
+            | 架构 | ARM64 |
+            | 内核版本 | `${{ inputs.kernel_version || '7.1' }}` |
+            | 桌面环境 | `${{ inputs.desktop_env || 'kde' }}` |
+            | 启动模式 | `${{ inputs.boot_mode || 'dual' }}` |
+            | Firefox | `${{ inputs.firefox_channel || 'official' }}` |
+            | Flatpak | `${{ inputs.install_flatpak || 'true' }}` |
+            | Mesa Freedreno/Turnip | `${{ inputs.install_gpu_driver || 'false' }}` |
+            | 额外驱动 | `${{ inputs.extra_driver_tags || 'sensor,MIPPS' }}` |
+
+            ### 默认账号
+
+            - 普通用户：`${{ inputs.default_user || 'luser' }}`
+            - root 用户：`root`
+
+            密码为构建时填写的值。
           draft: false
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-  # ==========================================
-  # 🚀 云端多路并发构建矩阵
-  # ==========================================
   build-debian:
     name: Build (${{ matrix.desktop }} | ${{ matrix.boot }})
     runs-on: ubuntu-24.04-arm
     needs: prepare-release
+
     strategy:
-      fail-fast: false 
-      # 🚨 核心修复 3：从上一阶段读取 JSON 格式的动态数组，彻底解决 if 报错！
+      fail-fast: false
       matrix:
         desktop: ${{ fromJSON(needs.prepare-release.outputs.matrix_desktop) }}
         boot: ${{ fromJSON(needs.prepare-release.outputs.matrix_boot) }}
-        
+
     steps:
-      - uses: actions/checkout@v4
-      
-      - name: "🔧 部署构建环境"
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Deploy build environment
+        shell: bash
         run: |
           sudo apt update
-          sudo apt install -y debootstrap libarchive-tools p7zip-full curl wget android-sdk-libsparse-utils
+          sudo apt install -y \
+            debootstrap \
+            libarchive-tools \
+            p7zip-full \
+            curl \
+            wget \
+            android-sdk-libsparse-utils \
+            gh
 
       - name: Download kernel bundle
+        shell: bash
         run: |
-          KERNEL_VER="${{ github.event.inputs.kernel_version }}"
-          if [ -z "$KERNEL_VER" ]; then KERNEL_VER="7.1"; fi
-          
+          set -e
+
+          KERNEL_VER="${{ inputs.kernel_version || '7.1' }}"
+
+          echo "📥 尝试从当前仓库下载 kernel-bundle-${KERNEL_VER}..."
           gh release download "kernel-bundle-${KERNEL_VER}" \
-            --pattern "*.deb" --repo "${{ github.repository }}" --clobber || true
+            --pattern "*.deb" \
+            --repo "${{ github.repository }}" \
+            --clobber || true
+
+          if ! ls *.deb >/dev/null 2>&1; then
+            echo "📥 当前仓库没有 kernel-bundle-${KERNEL_VER}，尝试 kernel-${KERNEL_VER}..."
+            gh release download "kernel-${KERNEL_VER}" \
+              --pattern "*.deb" \
+              --repo "${{ github.repository }}" \
+              --clobber || true
+          fi
+
+          if ! ls *.deb >/dev/null 2>&1; then
+            echo "📥 当前仓库没有内核包，尝试上游 kernel-bundle-${KERNEL_VER}..."
+            gh release download "kernel-bundle-${KERNEL_VER}" \
+              --pattern "*.deb" \
+              --repo "code002-2/Xiaomi-pad-6s-pro-Linux" \
+              --clobber || true
+          fi
+
+          if ! ls *.deb >/dev/null 2>&1; then
+            echo "📥 上游没有 kernel-bundle-${KERNEL_VER}，尝试上游 kernel-${KERNEL_VER}..."
+            gh release download "kernel-${KERNEL_VER}" \
+              --pattern "*.deb" \
+              --repo "code002-2/Xiaomi-pad-6s-pro-Linux" \
+              --clobber || true
+          fi
+
+          echo "📦 当前工作区内核/基础 deb 文件："
+          ls -lh *.deb 2>/dev/null || echo "⚠️ 未找到任何内核 deb。后续 RootFS 可能缺少内核包。"
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Download extra upstream driver debs
+        shell: bash
+        run: |
+          set -e
+
+          EXTRA_TAGS="${{ inputs.extra_driver_tags || 'sensor,MIPPS' }}"
+
+          echo "📥 准备下载上游额外驱动 Release:"
+          echo "$EXTRA_TAGS"
+
+          IFS=',' read -ra TAGS <<< "$EXTRA_TAGS"
+
+          for tag in "${TAGS[@]}"; do
+            tag="$(echo "$tag" | xargs)"
+            if [ -z "$tag" ]; then
+              continue
+            fi
+
+            case "$tag" in
+              libssc|iio_sensor_patched)
+                echo "⚠️ 跳过 $tag：默认 sensor 已包含相关包，避免重复覆盖。"
+                continue
+                ;;
+              kernel-*|kernel_bundle*|kernel-bundle*)
+                echo "⚠️ 跳过 $tag：内核包由 Download kernel bundle 步骤处理。"
+                continue
+                ;;
+              fix|app|steam)
+                echo "⚠️ 跳过 $tag：请使用 install_wifi_fix 或 install_steam_runtime 开关。"
+                continue
+                ;;
+            esac
+
+            echo "----------------------------------------"
+            echo "📦 下载 Release: $tag"
+
+            gh release download "$tag" \
+              --repo "code002-2/Xiaomi-pad-6s-pro-Linux" \
+              --pattern "*.deb" \
+              --clobber || echo "⚠️ 下载 $tag 失败，继续构建。"
+          done
+
+          if [ "${{ inputs.download_devauth_fallback || 'false' }}" = "true" ]; then
+            if ls sheng-devauth*.deb >/dev/null 2>&1; then
+              echo "✅ 已存在 sheng-devauth deb，不需要 fallback。"
+            else
+              echo "🔐 下载 sheng_devauth fallback..."
+              gh release download "sheng_devauth" \
+                --repo "code002-2/Xiaomi-pad-6s-pro-Linux" \
+                --pattern "*.deb" \
+                --clobber || echo "⚠️ sheng_devauth fallback 下载失败，继续构建。"
+            fi
+          fi
+
+          if [ "${{ inputs.install_wifi_fix || 'false' }}" = "true" ]; then
+            WIFI_TAG="${{ inputs.wifi_fix_tag || 'fix' }}"
+            echo "📡 下载 Wi-Fi 修复包: ${WIFI_TAG}"
+            gh release download "${WIFI_TAG}" \
+              --repo "code002-2/Xiaomi-pad-6s-pro-Linux" \
+              --pattern "*.deb" \
+              --clobber || echo "⚠️ Wi-Fi 修复包下载失败，继续构建。"
+          fi
+
+          if [ "${{ inputs.install_steam_runtime || 'false' }}" = "true" ]; then
+            STEAM_TAG="${{ inputs.steam_runtime_tag || 'app' }}"
+            echo "🎮 下载 Steam ARM64 runtime / Proton 相关包: ${STEAM_TAG}"
+            gh release download "${STEAM_TAG}" \
+              --repo "code002-2/Xiaomi-pad-6s-pro-Linux" \
+              --pattern "*" \
+              --clobber || echo "⚠️ Steam runtime 下载失败，继续构建。"
+          fi
+
+          echo "📦 当前工作区 deb 文件："
+          ls -lh *.deb 2>/dev/null || echo "未找到额外 deb。"
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Download Mesa Freedreno Turnip driver
+        if: ${{ inputs.install_gpu_driver == 'true' }}
+        shell: bash
+        run: |
+          GPU_TAG="${{ inputs.gpu_release_tag || 'mesa-freedreno-turnip-latest' }}"
+
+          echo "🎮 尝试下载 Mesa 显驱 Release: ${GPU_TAG}"
+          gh release download "${GPU_TAG}" \
+            --pattern "mesa-freedreno-turnip-opt_*_arm64.deb" \
+            --repo "${{ github.repository }}" \
+            --clobber || true
+
+          echo "🎮 当前工作区 Mesa 显驱 deb："
+          ls -lh mesa-freedreno-turnip-opt_*_arm64.deb 2>/dev/null || echo "未找到 Mesa 显驱 deb，将跳过注入。"
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Build RootFS
         id: build
+        shell: bash
+        env:
+          ROOTFS_USER: ${{ inputs.default_user || 'luser' }}
+          ROOTFS_PASS: ${{ inputs.default_pass || 'luser' }}
+          ROOTFS_ROOT_PASS: ${{ inputs.root_pass || '1234' }}
+          FIREFOX_CHANNEL: ${{ inputs.firefox_channel || 'official' }}
+          INSTALL_FLATPAK: ${{ inputs.install_flatpak || 'true' }}
+          INSTALL_GPU_DRIVER: ${{ inputs.install_gpu_driver || 'false' }}
+          IMAGE_SIZE: ${{ inputs.image_size || '8G' }}
         run: |
+          echo "::add-mask::$ROOTFS_PASS"
+          echo "::add-mask::$ROOTFS_ROOT_PASS"
+
           chmod +x sheng-rootfs_build.sh
-          # 把矩阵分配到的专属任务传给构建脚本
-          sudo bash sheng-rootfs_build.sh debian-desktop "${{ github.event.inputs.kernel_version || '7.1' }}" "${{ matrix.boot }}" "${{ matrix.desktop }}"
-          
+
+          sudo -E bash sheng-rootfs_build.sh \
+            debian-desktop \
+            "${{ inputs.kernel_version || '7.1' }}" \
+            "${{ matrix.boot }}" \
+            "${{ matrix.desktop }}"
+
           PKG_COUNT=$(ls -1 *.7z 2>/dev/null | wc -l)
-          echo "pkg_count=$PKG_COUNT" >> $GITHUB_OUTPUT
+          echo "pkg_count=$PKG_COUNT" >> "$GITHUB_OUTPUT"
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
@@ -152,10 +400,11 @@ jobs:
           name: debian-${{ matrix.desktop }}-${{ matrix.boot }}
           path: "*.7z"
           retention-days: 7
+          if-no-files-found: error
 
       - name: Upload to Release
-        if: ${{ !github.event.inputs.skip_release && steps.build.outputs.pkg_count > 0 }}
-        uses: softprops/action-gh-release@v1
+        if: ${{ inputs.skip_release != true && steps.build.outputs.pkg_count > 0 }}
+        uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ needs.prepare-release.outputs.release_tag }}
           files: "*.7z"
