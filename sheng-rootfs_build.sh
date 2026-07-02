@@ -305,7 +305,6 @@ install_base_packages() {
         pipewire-pulse \
         wireplumber \
         alsa-utils \
-        alsa-ucm-conf \
         pavucontrol \
         upower \
         power-profiles-daemon \
@@ -391,9 +390,15 @@ install_device_debs() {
         libmbim-glib4 \
         initramfs-tools"
 
+    echo "🔊 正在移除 Debian 官方 alsa-ucm-conf，避免与 alsa-xiaomi-sheng.deb 文件冲突..."
+    chroot rootdir bash -c "export DEBIAN_FRONTEND=noninteractive && apt-get purge -y alsa-ucm-conf" || true
+    chroot rootdir bash -c "export DEBIAN_FRONTEND=noninteractive && apt-get autoremove -y" || true
+    chroot rootdir bash -c "dpkg --configure -a" || true
+
     chroot rootdir bash -c "export DEBIAN_FRONTEND=noninteractive && apt-get install -y /tmp/debs/*.deb" || {
         echo "⚠️ 部分设备 .deb 安装失败，尝试修复依赖后继续。"
-        chroot rootdir bash -c "export DEBIAN_FRONTEND=noninteractive && apt-get -f install -y"
+        chroot rootdir bash -c "export DEBIAN_FRONTEND=noninteractive && apt-get --fix-broken install -y" || true
+        chroot rootdir bash -c "export DEBIAN_FRONTEND=noninteractive && dpkg --configure -a" || true
         chroot rootdir bash -c "export DEBIAN_FRONTEND=noninteractive && apt-get install -y /tmp/debs/*.deb"
     }
 
